@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Password Strength Checker</title>
+<style>
+:root{--bg:#eef2f1;--card:#fff;--ink:#14282b;--mute:#5b6e70;--line:#d5dedc;--teal:#0f6b66;--bad:#c2410c;--ok:#a16207;--good:#15803d}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1819;--card:#152426;--ink:#e6f0ee;--mute:#93a9a8;--line:#27393b;--teal:#4fc3b9;--bad:#fb923c;--ok:#facc15;--good:#4ade80}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Georgia,"Times New Roman",serif;padding:24px 16px}
+main{max-width:640px;margin:0 auto}
+h1{font-size:2rem;margin:0 0 4px}
+p.sub{color:var(--mute);margin:0 0 24px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-bottom:16px}
+h2{font-size:1.1rem;margin:0 0 12px}
+.row{display:flex;gap:8px}
+input[type=password],input[type=text]{flex:1;min-width:0;font:1.1rem ui-monospace,Menlo,Consolas,monospace;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+button{font:inherit;cursor:pointer;border:1px solid var(--teal);background:var(--teal);color:var(--bg);border-radius:6px;padding:10px 14px}
+button.alt{background:transparent;color:var(--teal)}
+:focus-visible{outline:3px solid var(--ok);outline-offset:2px}
+.meter{height:10px;background:var(--line);border-radius:5px;margin:16px 0 6px;overflow:hidden}
+.meter i{display:block;height:100%;width:0;transition:width .25s,background .25s}
+#label{font-weight:bold}
+ul{list-style:none;padding:0;margin:12px 0 0}
+li{padding:4px 0 4px 26px;position:relative}
+li::before{content:"✗";position:absolute;left:4px;color:var(--bad)}
+li.pass::before{content:"✓";color:var(--good)}
+.alt-item{display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid var(--line);padding:8px 0;font-family:ui-monospace,Menlo,Consolas,monospace;word-break:break-all}
+.note{color:var(--mute);font-size:.9rem}
+</style>
+</head>
+<body>
+<main>
+<h1>Password Strength Checker</h1>
+<p class="sub">Everything runs in your browser. Nothing you type is sent anywhere.</p>
+
+<section>
+<h2>Check a password</h2>
+<div class="row">
+<input id="pw" type="password" autocomplete="off" aria-label="Password to check" placeholder="Type a password">
+<button class="alt" id="toggle" type="button">Show</button>
+</div>
+<div class="meter" aria-hidden="true"><i id="bar"></i></div>
+<div><span id="label">Enter a password</span> <span class="note" id="entropy"></span></div>
+<ul id="rules"></ul>
+<p class="note" id="tips"></p>
+<div class="row" style="margin-top:12px">
+<button id="save" type="button">Save to history</button>
+<button class="alt" id="clear" type="button">Clear history</button>
+</div>
+<p class="note" id="msg" role="status"></p>
+</section>
+
+<section>
+<h2>Stronger alternatives</h2>
+<div id="alts"></div>
+<button class="alt" id="regen" type="button" style="margin-top:12px">Generate new ones</button>
+</section>
+
+<section>
+<h2>How it works</h2>
+<p class="note">Strength is estimated from length and character variety (entropy = length × log2 of the character pool), then reduced for common passwords, repeated characters, and sequences like "abc" or "123". For reuse prevention, saved passwords are stored only as SHA-256 hashes in your browser's localStorage, never as plain text. Suggestions use crypto.getRandomValues, a cryptographically secure random source.</p>
+</section>
+</main>
+<script>
+const COMMON=["password","123456","12345678","123456789","qwerty","abc123","letmein","admin","welcome","iloveyou","monkey","dragon","football","111111","123123","password1","passw0rd","qwerty123","1q2w3e4r","sunshine","princess","login","master","hello","freedom"];
+const WORDS=["maple","orbit","falcon","river","copper","lantern","meadow","quartz","harbor","violet","summit","ember","cactus","drift","pepper","glacier","marble","nimbus","saffron","tundra"];
+const $=id=>document.getElementById(id);
+const HKEY="pw_history_v1";
+
+const rand=n=>{const a=new Uint32Array(1);const lim=Math.floor(2**32/n)*n;do{crypto.getRandomValues(a)}while(a[0]>=lim);return a[0]%n};
+const pick=s=>s[rand(s.length)];
+
+async function sha256(s){
+  if(!crypto.subtle)return null;
+  const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+const getHist=()=>{try{return JSON.parse(localStorage.getItem(HKEY)||"[]")}catch(e){return[]}};
+const setHist=h=>{try{localStorage.setItem(HKEY,JSON.stringify(h))}catch(e){}};
+
+function hasSequence(p){
+  const s=p.toLowerCase();
+  for(let i=0;i<s.length-2;i++){
+    const a=s.charCodeAt(i),b=s.charCodeAt(i+1),c=s.charCodeAt(i+2);
+    if((b-a===1&&c-b===1)||(a-b===1&&b-c===1))return true;
+  }
+  return false;
+}
+function analyze(p){
+  const has={lower:/[a-z]/.test(p),upper:/[A-Z]/.test(p),digit:/\d/.test(p),symbol:/[^A-Za-z0-9]/.test(p)};
+  const pool=(has.lower?26:0)+(has.upper?26:0)+(has.digit?10:0)+(has.symbol?33:0);
+  let bits=p.length*Math.log2(pool||1);
+  const lower=p.toLowerCase();
+  const common=COMMON.some(w=>lower.includes(w));
+  const repeats=/(.)\1{2,}/.test(p);
+  const seq=hasSequence(p);
+  if(common)bits*=0.4;
+  if(repeats)bits*=0.8;
+  if(seq)bits*=0.8;
+  return{has,bits,common,repeats,seq,lenOk:p.length>=12};
+}
+function rating(bits,p){
+  if(!p)return["Enter a password",0,"var(--mute)"];
+  if(bits<28)return["Very weak",15,"var(--bad)"];
+  if(bits<45)return["Weak",35,"var(--bad)"];
+  if(bits<60)return["Fair",60,"var(--ok)"];
+  if(bits<80)return["Strong",82,"var(--good)"];
+  return["Very strong",100,"var(--good)"];
+}
+function generate(){
+  const sym="!@#$%^&*-_=+?",all="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"+sym;
+  let a="";for(let i=0;i<16;i++)a+=pick(all);
+  const w=()=>{const x=pick(WORDS);return x[0].toUpperCase()+x.slice(1)};
+  const b=`${w()}-${w()}-${w()}-${rand(90)+10}${pick(sym)}`;
+  let c="";for(let i=0;i<20;i++)c+=pick(all);
+  return[a,b,c];
+}
+function renderAlts(){
+  const box=$("alts");box.innerHTML="";
+  generate().forEach(pw=>{
+    const d=document.createElement("div");d.className="alt-item";
+    const t=document.createElement("span");t.textContent=pw;
+    const b=document.createElement("button");b.className="alt";b.type="button";b.textContent="Copy";
+    b.onclick=async()=>{try{await navigator.clipboard.writeText(pw);b.textContent="Copied"}catch(e){b.textContent="Select and copy"}setTimeout(()=>b.textContent="Copy",1500)};
+    d.append(t,b);box.append(d);
+  });
+}
+let token=0;
+async function update(){
+  const p=$("pw").value,my=++token;
+  const r=analyze(p);
+  const [txt,w,col]=rating(r.bits,p);
+  $("bar").style.width=w+"%";$("bar").style.background=col;
+  $("label").textContent=txt;$("label").style.color=col;
+  $("entropy").textContent=p?`about ${Math.round(r.bits)} bits of entropy`:"";
+  let reused=false,hash=null;
+  if(p){hash=await sha256(p);if(my!==token)return;reused=!!hash&&getHist().includes(hash)}
+  const rules=[
+    ["At least 12 characters",r.lenOk],
+    ["Has lowercase and uppercase letters",r.has.lower&&r.has.upper],
+    ["Has a number",r.has.digit],
+    ["Has a symbol",r.has.symbol],
+    ["Not a common password",p&&!r.common],
+    ["No repeated characters or sequences",p&&!r.repeats&&!r.seq],
+    ["Not used before (checked against saved history)",p&&!reused]
+  ];
+  $("rules").innerHTML="";
+  rules.forEach(([t,ok])=>{const li=document.createElement("li");li.textContent=t;if(ok)li.className="pass";$("rules").append(li)});
+  const tips=[];
+  if(p){
+    if(!r.lenOk)tips.push("Make it longer. Length adds the most strength.");
+    if(r.common)tips.push("Avoid common words like \"password\".");
+    if(r.repeats||r.seq)tips.push("Avoid patterns like \"aaa\" or \"abc\".");
+    if(reused)tips.push("You saved this password before. Pick a new one.");
+    if(!tips.length&&r.bits<80)tips.push("Try a passphrase of several random words.");
+  }
+  $("tips").textContent=tips.join(" ");
+  $("save").disabled=!p||reused;
+}
+$("pw").addEventListener("input",()=>{$("msg").textContent="";update()});
+$("toggle").onclick=()=>{const s=$("pw").type==="password";$("pw").type=s?"text":"password";$("toggle").textContent=s?"Hide":"Show"};
+$("save").onclick=async()=>{
+  const p=$("pw").value;if(!p)return;
+  const h=await sha256(p);
+  if(!h){$("msg").textContent="Saving needs a secure page (https or localhost).";return}
+  const hist=getHist();hist.push(h);setHist(hist);
+  $("msg").textContent="Saved as a hash. This password will now be flagged as reused.";update();
+};
+$("clear").onclick=()=>{setHist([]);$("msg").textContent="History cleared.";update()};
+$("regen").onclick=renderAlts;
+renderAlts();update();
+</script>
+</body>
+</html>

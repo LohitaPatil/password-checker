@@ -1,0 +1,9 @@
+{
+  "name": "password-strength-checker",
+  "version": "1.0.0",
+  "description": "Browser-based password strength checker with reuse prevention",
+  "scripts": {
+    "start": "npx --yes http-server . -p 8080 -o"
+  },
+  "license": "MIT"
+}
